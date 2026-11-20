@@ -63,7 +63,7 @@ async function computeOffset(video, subtitleContent) {
   log.warn(() => `[AudioSync] Streaming up to ${Math.round(durationMs / 1000)}s of audio from ${(window.startMs / 1000).toFixed(0)}s in ` +
     `${stream.filename || 'Real-Debrid stream'} (found by ${stream.matchedBy})`);
   let previousCandidate = null;
-  const { earlyResult, speech, readMs, firstAudioMs } = await streamSpeech(stream.url, window.startMs, durationMs, (speechSoFar) => {
+  const { earlyResult, speech, readMs, openedMs, firstAudioMs, reconnects } = await streamSpeech(stream.url, window.startMs, durationMs, (speechSoFar) => {
     const candidate = findEarlyOffset(openingCues, speechSoFar, MAX_SHIFT_MS);
     const stable = candidate && previousCandidate &&
       Math.abs(candidate.offsetMs - previousCandidate.offsetMs) <= STABLE_OFFSET_TOLERANCE_MS;
@@ -75,7 +75,7 @@ async function computeOffset(video, subtitleContent) {
     `offset ${result.offsetMs === null ? 'none' : `${result.offsetMs}ms`} (${result.reason || 'matched'}, ` +
     `score ${result.scorePerFrame}, margin ${result.marginPerFrame}, ${result.cues} lines, ` +
     `${earlyResult ? 'stopped early' : 'full window'} after ${(readMs / 1000).toFixed(0)}s of audio, ` +
-    `first audio after ${firstAudioMs}ms, ${Date.now() - startedAt}ms total)`);
+    `file opened after ${openedMs}ms, first audio after ${firstAudioMs}ms, ${reconnects} reconnects, ${Date.now() - startedAt}ms total)`);
   return { ...result, offsetMs: result.offsetMs ?? 0 };
 }
 

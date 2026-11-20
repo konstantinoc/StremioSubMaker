@@ -57,10 +57,11 @@ function streamSpeech(mediaUrl, startMs, maxDurationMs, checkProgress) {
     const httpOptions = /^https?:\/\//i.test(mediaUrl)
       ? ['-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5', '-rw_timeout', '20000000']
       : [];
+    const seekOptions = startMs > 0 ? ['-ss', (startMs / 1000).toFixed(3)] : [];
     const args = [
-      '-nostdin', '-hide_banner', '-loglevel', 'error',
+      '-nostdin', '-hide_banner', '-nostats', '-loglevel', 'info',
       ...httpOptions,
-      '-ss', (startMs / 1000).toFixed(3),
+      ...seekOptions,
       '-i', mediaUrl,
       '-t', (maxDurationMs / 1000).toFixed(3),
       '-map', '0:a:0?', '-vn', '-sn', '-dn',
@@ -76,6 +77,9 @@ function streamSpeech(mediaUrl, startMs, maxDurationMs, checkProgress) {
     let earlyResult = null;
     const spawnedAt = Date.now();
     let firstAudioMs = null;
+    let openedMs = null;
+    let reconnects = 0;
+    const timings = () => ({ openedMs, firstAudioMs, reconnects });
 
     const timer = setTimeout(() => {
       ffmpeg.kill('SIGKILL');
@@ -112,9 +116,12 @@ function streamSpeech(mediaUrl, startMs, maxDurationMs, checkProgress) {
       }
     });
     ffmpeg.stderr.on('data', (chunk) => {
-      if (stderrText.length < 2000) {
-        stderrText += chunk.toString();
+      const text = chunk.toString();
+      if (openedMs === null && text.includes('Input #0')) {
+        openedMs = Date.now() - spawnedAt;
       }
+      reconnects += (text.match(/reconnect/gi) || []).length;
+      stderrText = (stderrText + text).slice(-2000);
     });
     ffmpeg.on('error', (error) => {
       clearTimeout(timer);
@@ -124,17 +131,17 @@ function streamSpeech(mediaUrl, startMs, maxDurationMs, checkProgress) {
       clearTimeout(timer);
       const readMs = logEnergies.length * FRAME_MS;
       if (earlyResult) {
-        resolve({ earlyResult, readMs, firstAudioMs });
+        resolve({ earlyResult, readMs, ...timings() });
         return;
       }
       if (logEnergies.length < (maxDurationMs / FRAME_MS) * 0.5) {
-        reject(new Error(`ffmpeg returned only ${(readMs / 1000).toFixed(1)}s of audio (code ${code}, signal ${signal}): ${stderrText.trim().slice(0, 300)}`));
+        reject(new Error(`ffmpeg returned only ${(readMs / 1000).toFixed(1)}s of audio (code ${code}, signal ${signal}): ${stderrText.trim().slice(-300)}`));
         return;
       }
       if (code !== 0) {
         log.debug(() => `[AudioSync] ffmpeg ended with code ${code} after ${(readMs / 1000).toFixed(1)}s of audio, using what was read`);
       }
-      resolve({ speech: speechSoFar(), readMs, firstAudioMs });
+      resolve({ speech: speechSoFar(), readMs, ...timings() });
     });
   });
 }
