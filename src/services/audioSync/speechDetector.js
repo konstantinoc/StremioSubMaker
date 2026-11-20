@@ -46,7 +46,7 @@ function smooth(values, radius) {
   return result;
 }
 
-function extractSpeechScores(mediaUrl, durationSeconds) {
+function extractSpeechScores(mediaUrl, startMs, durationMs) {
   return new Promise((resolve, reject) => {
     const httpOptions = /^https?:\/\//i.test(mediaUrl)
       ? ['-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5', '-rw_timeout', '20000000']
@@ -54,8 +54,9 @@ function extractSpeechScores(mediaUrl, durationSeconds) {
     const args = [
       '-nostdin', '-hide_banner', '-loglevel', 'error',
       ...httpOptions,
+      '-ss', (startMs / 1000).toFixed(3),
       '-i', mediaUrl,
-      '-t', String(Math.ceil(durationSeconds)),
+      '-t', (durationMs / 1000).toFixed(3),
       '-map', '0:a:0?', '-vn', '-sn', '-dn',
       '-ac', '1', '-ar', String(SAMPLE_RATE),
       '-af', 'highpass=f=250,lowpass=f=3500',
@@ -104,7 +105,7 @@ function extractSpeechScores(mediaUrl, durationSeconds) {
       if (code !== 0) {
         log.debug(() => `[AudioSync] ffmpeg ended with code ${code} after ${seconds.toFixed(1)}s of audio, using what was read`);
       }
-      resolve({ frameMs: FRAME_MS, scores: toSpeechScores(logEnergies) });
+      resolve({ frameMs: FRAME_MS, startMs, scores: toSpeechScores(logEnergies) });
     });
   });
 }

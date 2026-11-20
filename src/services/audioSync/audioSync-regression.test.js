@@ -60,6 +60,15 @@ test('finds the shift that puts the opening dialogue on speech', () => {
   }
 });
 
+test('finds the shift when the audio starts at a seek position', () => {
+  const cues = buildCues(40);
+  const full = buildSpeech(cues, -2600, 20, 400000);
+  const startMs = 9000;
+  const speech = { frameMs: 20, startMs, scores: full.scores.slice(startMs / 20) };
+  const result = findOffset(selectOpeningDialogue(cues), speech, 30000);
+  assert.ok(Math.abs(result.offsetMs + 2600) <= 40, `expected -2600, got ${result.offsetMs}`);
+});
+
 test('refuses to shift when the audio has no speech pattern', () => {
   const cues = buildCues(40);
   const scores = new Float32Array(20000);

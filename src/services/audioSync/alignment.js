@@ -1,6 +1,6 @@
 const { isDialogueCue } = require('./subtitleTiming');
 
-const OPENING_WINDOW_MS = 6 * 60 * 1000;
+const OPENING_WINDOW_MS = (Number(process.env.AUDIO_SYNC_OPENING_SECONDS) || 120) * 1000;
 const MAX_OPENING_CUES = 80;
 const MIN_OPENING_CUES = 6;
 const OUT_OF_AUDIO_SCORE = -1;
@@ -18,11 +18,14 @@ function selectOpeningDialogue(cues) {
   return dialogue.filter((cue) => cue.start < windowEnd).slice(0, MAX_OPENING_CUES);
 }
 
-function audioDurationNeededMs(openingCues, maxShiftMs) {
+/** The stretch of audio that covers the opening dialogue at every shift searched. */
+function audioWindowMs(openingCues, maxShiftMs) {
   if (openingCues.length === 0) {
-    return 0;
+    return { startMs: 0, durationMs: 0 };
   }
-  return openingCues[openingCues.length - 1].end + maxShiftMs + 5000;
+  const startMs = Math.max(0, openingCues[0].start - maxShiftMs - 2000);
+  const endMs = openingCues[openingCues.length - 1].end + maxShiftMs + 2000;
+  return { startMs, durationMs: endMs - startMs };
 }
 
 /*
@@ -36,11 +39,12 @@ function findOffset(openingCues, speech, maxShiftMs) {
     return { offsetMs: null, reason: `only ${openingCues.length} opening dialogue lines`, tooFewLines: true };
   }
   const { frameMs, scores } = speech;
+  const audioStartMs = speech.startMs || 0;
   const prefix = new Float64Array(scores.length + 1);
   for (let index = 0; index < scores.length; index++) {
     prefix[index + 1] = prefix[index] + scores[index];
   }
-  const cueFrames = openingCues.map((cue) => [Math.round(cue.start / frameMs), Math.round(cue.end / frameMs)]);
+  const cueFrames = openingCues.map((cue) => [Math.round((cue.start - audioStartMs) / frameMs), Math.round((cue.end - audioStartMs) / frameMs)]);
   const totalCueFrames = cueFrames.reduce((sum, [start, end]) => sum + (end - start), 0);
   const maxShiftFrames = Math.round(maxShiftMs / frameMs);
   const shiftCount = maxShiftFrames * 2 + 1;
@@ -89,6 +93,6 @@ function findOffset(openingCues, speech, maxShiftMs) {
 module.exports = {
   MIN_OPENING_CUES,
   selectOpeningDialogue,
-  audioDurationNeededMs,
+  audioWindowMs,
   findOffset
 };

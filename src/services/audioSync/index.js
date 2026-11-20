@@ -1,11 +1,11 @@
 const { LRUCache } = require('lru-cache');
 const log = require('../../utils/logger');
 const { parseCues, shiftSubtitleContent } = require('./subtitleTiming');
-const { MIN_OPENING_CUES, selectOpeningDialogue, audioDurationNeededMs, findOffset } = require('./alignment');
+const { MIN_OPENING_CUES, selectOpeningDialogue, audioWindowMs, findOffset } = require('./alignment');
 const { extractSpeechScores } = require('./speechDetector');
 const { findStream } = require('./realDebridLocator');
 
-const MAX_SHIFT_MS = (Number(process.env.AUDIO_SYNC_MAX_SHIFT_SECONDS) || 90) * 1000;
+const MAX_SHIFT_MS = (Number(process.env.AUDIO_SYNC_MAX_SHIFT_SECONDS) || 60) * 1000;
 const MAX_AUDIO_MS = (Number(process.env.AUDIO_SYNC_MAX_AUDIO_SECONDS) || 900) * 1000;
 const FINAL_WAIT_MS = Number(process.env.AUDIO_SYNC_WAIT_MS) || 45000;
 const MIN_APPLIED_OFFSET_MS = 100;
@@ -56,10 +56,12 @@ async function computeOffset(video, subtitleContent) {
     const wanted = video.size !== null ? `size ${video.size}` : (video.filename ? `name ${video.filename}` : 'recent download');
     return { offsetMs: 0, reason: `no Real-Debrid file found (${wanted})`, retry: true };
   }
-  const durationMs = Math.min(MAX_AUDIO_MS, audioDurationNeededMs(openingCues, MAX_SHIFT_MS));
+  const window = audioWindowMs(openingCues, MAX_SHIFT_MS);
+  const durationMs = Math.min(MAX_AUDIO_MS, window.durationMs);
   const startedAt = Date.now();
-  log.warn(() => `[AudioSync] Reading ${Math.round(durationMs / 1000)}s of audio from ${stream.filename || 'Real-Debrid stream'} (found by ${stream.matchedBy})`);
-  const speech = await extractSpeechScores(stream.url, durationMs / 1000);
+  log.warn(() => `[AudioSync] Reading ${Math.round(durationMs / 1000)}s of audio from ${(window.startMs / 1000).toFixed(0)}s in ` +
+    `${stream.filename || 'Real-Debrid stream'} (found by ${stream.matchedBy})`);
+  const speech = await extractSpeechScores(stream.url, window.startMs, durationMs);
   const result = findOffset(openingCues, speech, MAX_SHIFT_MS);
   log.warn(() => `[AudioSync] ${stream.filename || 'stream'}: first dialogue at ${(openingCues[0].start / 1000).toFixed(2)}s, ` +
     `offset ${result.offsetMs === null ? 'none' : `${result.offsetMs}ms`} (${result.reason || 'matched'}, ` +
