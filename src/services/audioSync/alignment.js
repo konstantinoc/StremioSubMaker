@@ -12,6 +12,7 @@ const GAP_LIMIT_MS = 3000;
 const EARLY_MIN_SCORE_PER_FRAME = 0.25;
 const EARLY_MIN_MARGIN_PER_FRAME = 0.15;
 const EARLY_SETTLE_MS = 3000;
+const SMALL_SHIFT_RANGE_MS = 20000;
 
 /** Dialogue cues from the first spoken line up to the end of the opening window. */
 function selectOpeningDialogue(cues) {
@@ -152,7 +153,9 @@ function findEarlyOffset(openingCues, speech, maxShiftMs) {
       bestIndex = index;
     }
   }
-  if (!reachedMaxShift && scoreByShift.length - 1 - bestIndex < Math.round(EARLY_SETTLE_MS / frameMs)) {
+  // In a small search range a wrong early peak is too close to the true shift, so every shift must be compared first
+  const settleFrames = maxShiftMs <= SMALL_SHIFT_RANGE_MS ? Infinity : Math.round(EARLY_SETTLE_MS / frameMs);
+  if (!reachedMaxShift && scoreByShift.length - 1 - bestIndex < settleFrames) {
     return null;
   }
   const exclusionFrames = Math.round(RIVAL_EXCLUSION_MS / frameMs);

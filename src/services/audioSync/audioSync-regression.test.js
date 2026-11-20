@@ -114,6 +114,16 @@ test('stops streaming early once the opening lines agree on a shift', () => {
   }
 });
 
+test('with a 10 second range the early decision waits for every shift', () => {
+  const cues = buildCues(60);
+  for (const offsetMs of [7880, -9200, 0]) {
+    const { opening, window, scores } = windowScores(cues, offsetMs, 10000);
+    const result = streamUntilStable(opening, scores, window.startMs, 10000);
+    assert.ok(result, `no early result for ${offsetMs}`);
+    assert.ok(Math.abs(result.offsetMs - offsetMs) <= 40, `expected ${offsetMs}, got ${result.offsetMs}`);
+  }
+});
+
 test('loud music before the first dialogue does not end the stream on a wrong shift', () => {
   const cues = buildCues(60);
   const { opening, window, scores } = windowScores(cues, 5000, 60000, (values, startMs) => {

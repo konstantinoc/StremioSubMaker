@@ -5,7 +5,7 @@ const { MIN_OPENING_CUES, selectOpeningDialogue, audioWindowMs, findOffset, find
 const { streamSpeech } = require('./speechDetector');
 const { findStream } = require('./realDebridLocator');
 
-const MAX_SHIFT_MS = (Number(process.env.AUDIO_SYNC_MAX_SHIFT_SECONDS) || 60) * 1000;
+const MAX_SHIFT_MS = (Number(process.env.AUDIO_SYNC_MAX_SHIFT_SECONDS) || 10) * 1000;
 const MAX_AUDIO_MS = (Number(process.env.AUDIO_SYNC_MAX_AUDIO_SECONDS) || 900) * 1000;
 const FINAL_WAIT_MS = Number(process.env.AUDIO_SYNC_WAIT_MS) || 45000;
 const MIN_APPLIED_OFFSET_MS = 100;
