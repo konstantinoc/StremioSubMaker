@@ -7,6 +7,11 @@ const OUT_OF_AUDIO_SCORE = -1;
 const RIVAL_EXCLUSION_MS = 2000;
 const MIN_MARGIN_PER_FRAME = 0.04;
 const MIN_SCORE_PER_FRAME = 0.1;
+const EARLY_CUES = Number(process.env.AUDIO_SYNC_EARLY_LINES) || 10;
+const GAP_LIMIT_MS = 3000;
+const EARLY_MIN_SCORE_PER_FRAME = 0.25;
+const EARLY_MIN_MARGIN_PER_FRAME = 0.15;
+const EARLY_SETTLE_MS = 3000;
 
 /** Dialogue cues from the first spoken line up to the end of the opening window. */
 function selectOpeningDialogue(cues) {
@@ -90,8 +95,89 @@ function findOffset(openingCues, speech, maxShiftMs) {
   return { offsetMs, ...stats };
 }
 
+/*
+ * Decides while the audio is still streaming. Only shifts whose first ten
+ * dialogue lines already fall inside the audio read so far are compared, and
+ * speech in the short gaps between those lines counts against a shift. The
+ * best one is accepted when it clearly beats every other compared shift and
+ * at least three seconds of later shifts were compared too, so the winner is
+ * not merely the last shift the audio reaches. Returns null to keep reading.
+ */
+function findEarlyOffset(openingCues, speech, maxShiftMs) {
+  if (openingCues.length < EARLY_CUES) {
+    return null;
+  }
+  const { frameMs, scores } = speech;
+  const audioStartMs = speech.startMs || 0;
+  const cueFrames = openingCues.slice(0, EARLY_CUES)
+    .map((cue) => [Math.round((cue.start - audioStartMs) / frameMs), Math.round((cue.end - audioStartMs) / frameMs)]);
+  const gapLimitFrames = Math.round(GAP_LIMIT_MS / frameMs);
+  const gapFrames = [];
+  for (let index = 1; index < cueFrames.length; index++) {
+    const gapStart = cueFrames[index - 1][1];
+    const gapEnd = Math.min(cueFrames[index][0], gapStart + gapLimitFrames);
+    if (gapEnd - gapStart >= 10) {
+      gapFrames.push([gapStart, gapEnd]);
+    }
+  }
+  const totalCueFrames = cueFrames.reduce((sum, [start, end]) => sum + (end - start), 0) +
+    gapFrames.reduce((sum, [start, end]) => sum + (end - start), 0);
+  const firstStart = cueFrames[0][0];
+  const lastEnd = cueFrames[cueFrames.length - 1][1];
+  const maxShiftFrames = Math.round(maxShiftMs / frameMs);
+  const lowestShift = Math.max(-firstStart, -maxShiftFrames);
+  const highestShift = Math.min(scores.length - lastEnd, maxShiftFrames);
+  const reachedMaxShift = highestShift === maxShiftFrames;
+  if (highestShift - lowestShift < Math.round(EARLY_SETTLE_MS / frameMs) * 2) {
+    return null;
+  }
+  const prefix = new Float64Array(scores.length + 1);
+  for (let index = 0; index < scores.length; index++) {
+    prefix[index + 1] = prefix[index] + scores[index];
+  }
+  const scoreByShift = new Float64Array(highestShift - lowestShift + 1);
+  for (let shift = lowestShift; shift <= highestShift; shift++) {
+    let total = 0;
+    for (const [cueStart, cueEnd] of cueFrames) {
+      total += prefix[cueEnd + shift] - prefix[cueStart + shift];
+    }
+    for (const [gapStart, gapEnd] of gapFrames) {
+      total -= prefix[gapEnd + shift] - prefix[gapStart + shift];
+    }
+    scoreByShift[shift - lowestShift] = total;
+  }
+  let bestIndex = 0;
+  for (let index = 1; index < scoreByShift.length; index++) {
+    if (scoreByShift[index] > scoreByShift[bestIndex]) {
+      bestIndex = index;
+    }
+  }
+  if (!reachedMaxShift && scoreByShift.length - 1 - bestIndex < Math.round(EARLY_SETTLE_MS / frameMs)) {
+    return null;
+  }
+  const exclusionFrames = Math.round(RIVAL_EXCLUSION_MS / frameMs);
+  let rivalScore = -Infinity;
+  for (let index = 0; index < scoreByShift.length; index++) {
+    if (Math.abs(index - bestIndex) > exclusionFrames && scoreByShift[index] > rivalScore) {
+      rivalScore = scoreByShift[index];
+    }
+  }
+  const scorePerFrame = scoreByShift[bestIndex] / totalCueFrames;
+  const marginPerFrame = (scoreByShift[bestIndex] - rivalScore) / totalCueFrames;
+  if (scorePerFrame < EARLY_MIN_SCORE_PER_FRAME || marginPerFrame < EARLY_MIN_MARGIN_PER_FRAME) {
+    return null;
+  }
+  return {
+    offsetMs: (bestIndex + lowestShift) * frameMs,
+    scorePerFrame: Number(scorePerFrame.toFixed(3)),
+    marginPerFrame: Number(marginPerFrame.toFixed(3)),
+    cues: EARLY_CUES
+  };
+}
+
 module.exports = {
   MIN_OPENING_CUES,
+  findEarlyOffset,
   selectOpeningDialogue,
   audioWindowMs,
   findOffset

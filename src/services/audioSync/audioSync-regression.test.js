@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { parseCues, isDialogueCue, shiftSubtitleContent } = require('./subtitleTiming');
-const { selectOpeningDialogue, findOffset } = require('./alignment');
+const { selectOpeningDialogue, findOffset, findEarlyOffset, audioWindowMs } = require('./alignment');
 
 const SRT = [
   '1', '00:00:01,000 --> 00:00:03,000', 'Subtitles by OpenSubtitles.org', '',
@@ -77,6 +77,67 @@ test('refuses to shift when the audio has no speech pattern', () => {
   }
   const result = findOffset(selectOpeningDialogue(cues), { frameMs: 20, scores }, 30000);
   assert.equal(result.offsetMs, null);
+});
+
+function streamUntilStable(cues, fullScores, startMs, maxShiftMs) {
+  let previous = null;
+  for (let frames = 250; frames <= fullScores.length; frames += 250) {
+    const speech = { frameMs: 20, startMs, scores: fullScores.slice(0, frames) };
+    const candidate = findEarlyOffset(cues, speech, maxShiftMs);
+    if (candidate && previous && Math.abs(candidate.offsetMs - previous.offsetMs) <= 60) {
+      return { ...candidate, readMs: frames * 20 };
+    }
+    previous = candidate;
+  }
+  return null;
+}
+
+function windowScores(cues, offsetMs, maxShiftMs, addNoise) {
+  const opening = selectOpeningDialogue(cues);
+  const window = audioWindowMs(opening, maxShiftMs);
+  const full = buildSpeech(cues, offsetMs, 20, window.startMs + window.durationMs);
+  const scores = full.scores.slice(window.startMs / 20);
+  if (addNoise) {
+    addNoise(scores, window.startMs);
+  }
+  return { opening, window, scores };
+}
+
+test('stops streaming early once the opening lines agree on a shift', () => {
+  const cues = buildCues(60);
+  for (const offsetMs of [3200, -16400, 47000]) {
+    const { opening, window, scores } = windowScores(cues, offsetMs, 60000);
+    const result = streamUntilStable(opening, scores, window.startMs, 60000);
+    assert.ok(result, `no early result for ${offsetMs}`);
+    assert.ok(Math.abs(result.offsetMs - offsetMs) <= 40, `expected ${offsetMs}, got ${result.offsetMs}`);
+    assert.ok(result.readMs < window.durationMs * 0.75, `read ${result.readMs} of ${window.durationMs}`);
+  }
+});
+
+test('loud music before the first dialogue does not end the stream on a wrong shift', () => {
+  const cues = buildCues(60);
+  const { opening, window, scores } = windowScores(cues, 5000, 60000, (values, startMs) => {
+    for (let time = cues[0].start - 45000; time < cues[0].start + 4000; time += 20) {
+      const frame = Math.floor((time - startMs) / 20);
+      if (frame >= 0 && frame < values.length) {
+        values[frame] = 1.4;
+      }
+    }
+  });
+  const result = streamUntilStable(opening, scores, window.startMs, 60000);
+  if (result) {
+    assert.ok(Math.abs(result.offsetMs - 5000) <= 40, `stopped on ${result.offsetMs}`);
+  }
+});
+
+test('keeps streaming when the audio has no speech pattern', () => {
+  const cues = buildCues(60);
+  const scores = new Float32Array(15000);
+  for (let index = 0; index < scores.length; index++) {
+    scores[index] = Math.sin(index * 78.233) * 0.5;
+  }
+  const opening = selectOpeningDialogue(cues);
+  assert.equal(streamUntilStable(opening, scores, audioWindowMs(opening, 60000).startMs, 60000), null);
 });
 
 function mockRealDebrid({ downloads = [], torrents = [], infos = {} }) {
