@@ -3,7 +3,7 @@ const log = require('../../utils/logger');
 const { parseCues, shiftSubtitleContent } = require('./subtitleTiming');
 const { MIN_OPENING_CUES, selectOpeningDialogue, audioDurationNeededMs, findOffset } = require('./alignment');
 const { extractSpeechScores } = require('./speechDetector');
-const { findStreamBySize } = require('./realDebridLocator');
+const { findStream } = require('./realDebridLocator');
 
 const MAX_SHIFT_MS = (Number(process.env.AUDIO_SYNC_MAX_SHIFT_SECONDS) || 90) * 1000;
 const MAX_AUDIO_MS = (Number(process.env.AUDIO_SYNC_MAX_AUDIO_SECONDS) || 900) * 1000;
@@ -18,48 +18,47 @@ function realDebridToken() {
   return String(process.env.REALDEBRID_API_KEY || '').trim();
 }
 
-function normalizeVideoSize(videoSize) {
+function describeVideo(videoSize, filename) {
   const numericSize = Number(videoSize);
-  return Number.isFinite(numericSize) && numericSize > 0 ? numericSize : null;
+  return {
+    size: Number.isFinite(numericSize) && numericSize > 0 ? numericSize : null,
+    filename: String(filename || '').trim() || null
+  };
 }
 
-function isActive(config, videoSize, sourceFileId) {
+function isActive(config, sourceFileId) {
   if (config?.audioAutoSyncMode !== true) {
     return false;
   }
-  let skipReason = null;
-  if (!realDebridToken()) {
-    skipReason = 'REALDEBRID_API_KEY is not set on the server';
-  } else if (normalizeVideoSize(videoSize) === null) {
-    skipReason = 'the player sent no video size, so the Real-Debrid file cannot be found';
-  }
-  if (!skipReason) {
+  if (realDebridToken()) {
     return true;
   }
-  const skipKey = `${skipReason}|${sourceFileId}`;
+  const skipKey = `no-token|${sourceFileId}`;
   if (!reportedSkips.has(skipKey)) {
     reportedSkips.set(skipKey, true);
-    log.warn(() => `[AudioSync] Skipped for ${sourceFileId || 'subtitle'}: ${skipReason}`);
+    log.warn(() => `[AudioSync] Skipped for ${sourceFileId || 'subtitle'}: REALDEBRID_API_KEY is not set on the server`);
   }
   return false;
 }
 
-function buildKey(videoSize, sourceFileId) {
-  return `${normalizeVideoSize(videoSize)}|${sourceFileId}`;
+function buildKey(video, sourceFileId) {
+  const identity = video.size !== null ? `s:${video.size}` : (video.filename ? `f:${video.filename.toLowerCase()}` : 'recent');
+  return `${identity}|${sourceFileId}`;
 }
 
-async function computeOffset(videoSize, subtitleContent) {
+async function computeOffset(video, subtitleContent) {
   const openingCues = selectOpeningDialogue(parseCues(subtitleContent));
   if (openingCues.length < MIN_OPENING_CUES) {
     return { offsetMs: 0, reason: `only ${openingCues.length} dialogue lines in subtitle`, retry: true };
   }
-  const stream = await findStreamBySize(realDebridToken(), videoSize);
+  const stream = await findStream(realDebridToken(), video);
   if (!stream) {
-    return { offsetMs: 0, reason: `no Real-Debrid file with size ${videoSize}`, retry: true };
+    const wanted = video.size !== null ? `size ${video.size}` : (video.filename ? `name ${video.filename}` : 'recent download');
+    return { offsetMs: 0, reason: `no Real-Debrid file found (${wanted})`, retry: true };
   }
   const durationMs = Math.min(MAX_AUDIO_MS, audioDurationNeededMs(openingCues, MAX_SHIFT_MS));
   const startedAt = Date.now();
-  log.warn(() => `[AudioSync] Reading ${Math.round(durationMs / 1000)}s of audio from ${stream.filename || 'Real-Debrid stream'}`);
+  log.warn(() => `[AudioSync] Reading ${Math.round(durationMs / 1000)}s of audio from ${stream.filename || 'Real-Debrid stream'} (found by ${stream.matchedBy})`);
   const speech = await extractSpeechScores(stream.url, durationMs / 1000);
   const result = findOffset(openingCues, speech, MAX_SHIFT_MS);
   log.warn(() => `[AudioSync] ${stream.filename || 'stream'}: first dialogue at ${(openingCues[0].start / 1000).toFixed(2)}s, ` +
@@ -69,18 +68,19 @@ async function computeOffset(videoSize, subtitleContent) {
 }
 
 /** Starts (once per video and source subtitle) measuring the subtitle offset against the stream audio. */
-function prepare({ config, videoSize, sourceFileId, subtitleContent }) {
-  if (!sourceFileId || typeof subtitleContent !== 'string' || !isActive(config, videoSize, sourceFileId)) {
+function prepare({ config, videoSize, filename, sourceFileId, subtitleContent }) {
+  if (!sourceFileId || typeof subtitleContent !== 'string' || !isActive(config, sourceFileId)) {
     return null;
   }
-  const key = buildKey(videoSize, sourceFileId);
+  const video = describeVideo(videoSize, filename);
+  const key = buildKey(video, sourceFileId);
   if (offsetsByKey.has(key)) {
     return Promise.resolve(offsetsByKey.get(key));
   }
   if (pendingByKey.has(key)) {
     return pendingByKey.get(key);
   }
-  const pending = computeOffset(normalizeVideoSize(videoSize), subtitleContent)
+  const pending = computeOffset(video, subtitleContent)
     .catch((error) => {
       log.warn(() => `[AudioSync] Could not sync ${sourceFileId}: ${error.message}`);
       return { offsetMs: 0, reason: error.message };
@@ -108,14 +108,14 @@ function withTimeout(promise, timeoutMs) {
  * running measurement (bounded by FINAL_WAIT_MS) because players cache it;
  * partial content is sent right away, shifted only if the offset is known.
  */
-async function applyToContent(content, { config, videoSize, sourceFileId, isFinal }) {
-  if (!sourceFileId || typeof content !== 'string' || content.length === 0 || !isActive(config, videoSize, sourceFileId)) {
+async function applyToContent(content, { config, videoSize, filename, sourceFileId, isFinal }) {
+  if (!sourceFileId || typeof content !== 'string' || content.length === 0 || !isActive(config, sourceFileId)) {
     return content;
   }
-  const key = buildKey(videoSize, sourceFileId);
+  const key = buildKey(describeVideo(videoSize, filename), sourceFileId);
   let result = offsetsByKey.get(key);
   if (!result && isFinal) {
-    const pending = pendingByKey.get(key) || prepare({ config, videoSize, sourceFileId, subtitleContent: content });
+    const pending = pendingByKey.get(key) || prepare({ config, videoSize, filename, sourceFileId, subtitleContent: content });
     result = pending ? await withTimeout(pending, FINAL_WAIT_MS) : null;
     if (!result) {
       log.warn(() => `[AudioSync] Offset for ${sourceFileId} not ready after ${FINAL_WAIT_MS}ms, serving unsynced subtitle`);

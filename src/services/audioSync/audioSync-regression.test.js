@@ -69,3 +69,53 @@ test('refuses to shift when the audio has no speech pattern', () => {
   const result = findOffset(selectOpeningDialogue(cues), { frameMs: 20, scores }, 30000);
   assert.equal(result.offsetMs, null);
 });
+
+function mockRealDebrid({ downloads = [], torrents = [], infos = {} }) {
+  const calls = [];
+  global.fetch = async (url, options = {}) => {
+    const path = url.replace(/^https:\/\/api\.real-debrid\.com\/rest\/1\.0/, '');
+    calls.push(`${options.method || 'GET'} ${path.split('?')[0]}`);
+    let body;
+    if (path.startsWith('/downloads')) {
+      body = downloads;
+    } else if (path.startsWith('/torrents/info/')) {
+      body = infos[path.split('/').pop()];
+    } else if (path.startsWith('/torrents')) {
+      body = torrents;
+    } else if (path === '/unrestrict/link') {
+      body = { download: `https://direct.example/${encodeURIComponent(new URLSearchParams(options.body).get('link'))}` };
+    }
+    return { ok: true, status: 200, json: async () => body };
+  };
+  return calls;
+}
+
+test('finds the Real-Debrid file by size, by name in a torrent, or as the newest download', async () => {
+  const { findStream } = require('./realDebridLocator');
+  const now = new Date().toISOString();
+  const old = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+  mockRealDebrid({
+    downloads: [
+      { filename: 'Old.Movie.mkv', filesize: 111, download: 'https://dl/old', generated: old },
+      { filename: 'Just.Played.mkv', filesize: 222, download: 'https://dl/new', generated: now }
+    ],
+    torrents: [{ id: 'T1', bytes: 9999 }],
+    infos: { T1: { files: [{ path: '/Show/Show.S01E01.mkv', bytes: 500, selected: 1 }, { path: '/Show/Show.S01E02.mkv', bytes: 600, selected: 1 }], links: ['https://rd/1', 'https://rd/2'] } }
+  });
+
+  const bySize = await findStream('token-size', { size: 111 });
+  assert.equal(bySize.url, 'https://dl/old');
+  assert.equal(bySize.matchedBy, 'size');
+
+  const byName = await findStream('token-name', { filename: 'show.s01e02.mkv' });
+  assert.equal(byName.url, `https://direct.example/${encodeURIComponent('https://rd/2')}`);
+  assert.equal(byName.matchedBy, 'file name');
+
+  const recent = await findStream('token-recent', {});
+  assert.equal(recent.url, 'https://dl/new');
+  assert.equal(recent.matchedBy, 'most recent download');
+
+  const fallback = await findStream('token-miss', { filename: 'Not.In.Account.mkv' });
+  assert.equal(fallback.url, 'https://dl/new');
+  assert.match(fallback.matchedBy, /no file name match/);
+});

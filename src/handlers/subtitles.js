@@ -5229,7 +5229,7 @@ async function handleTranslation(sourceFileId, targetLanguage, config, options =
       }
 
       log.debug(() => `[Translation] Pre-flight validation passed: ${sourceContent.length} bytes`);
-      audioSync.prepare({ config, videoSize: options.videoSize, sourceFileId, subtitleContent: sourceContent });
+      audioSync.prepare({ config, videoSize: options.videoSize, filename: options.filename, sourceFileId, subtitleContent: sourceContent });
 
     } catch (error) {
       if (!error || !error._alreadyLogged) {

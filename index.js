@@ -5486,7 +5486,7 @@ app.get('/addon/:config/translate/:sourceFileId/:targetLang', normalizeSubtitleF
 
         // Create deduplication key based on source file and target language
         const dedupKey = `translate:${configKey}:${sourceFileId}:${targetLang}`;
-        const audioSyncContext = { config, videoSize: req.query.videoSize, sourceFileId };
+        const audioSyncContext = { config, videoSize: req.query.videoSize, filename: req.query.filename, sourceFileId };
 
         // Unusual purge: if same translated subtitle is loaded 3 times in < 5s, purge and retrigger
         // SAFETY BLOCK: Only purge if translation is NOT currently in progress
