@@ -74,6 +74,8 @@ function streamSpeech(mediaUrl, startMs, maxDurationMs, checkProgress) {
     let stderrText = '';
     let framesAtLastCheck = 0;
     let earlyResult = null;
+    const spawnedAt = Date.now();
+    let firstAudioMs = null;
 
     const timer = setTimeout(() => {
       ffmpeg.kill('SIGKILL');
@@ -84,6 +86,9 @@ function streamSpeech(mediaUrl, startMs, maxDurationMs, checkProgress) {
     ffmpeg.stdout.on('data', (chunk) => {
       if (earlyResult) {
         return;
+      }
+      if (firstAudioMs === null) {
+        firstAudioMs = Date.now() - spawnedAt;
       }
       const buffer = carry.length ? Buffer.concat([carry, chunk]) : chunk;
       const frameBytes = SAMPLES_PER_FRAME * 2;
@@ -119,7 +124,7 @@ function streamSpeech(mediaUrl, startMs, maxDurationMs, checkProgress) {
       clearTimeout(timer);
       const readMs = logEnergies.length * FRAME_MS;
       if (earlyResult) {
-        resolve({ earlyResult, readMs });
+        resolve({ earlyResult, readMs, firstAudioMs });
         return;
       }
       if (logEnergies.length < (maxDurationMs / FRAME_MS) * 0.5) {
@@ -129,7 +134,7 @@ function streamSpeech(mediaUrl, startMs, maxDurationMs, checkProgress) {
       if (code !== 0) {
         log.debug(() => `[AudioSync] ffmpeg ended with code ${code} after ${(readMs / 1000).toFixed(1)}s of audio, using what was read`);
       }
-      resolve({ speech: speechSoFar(), readMs });
+      resolve({ speech: speechSoFar(), readMs, firstAudioMs });
     });
   });
 }
