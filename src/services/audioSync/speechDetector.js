@@ -6,6 +6,8 @@ const FRAME_MS = 20;
 const SAMPLES_PER_FRAME = (SAMPLE_RATE * FRAME_MS) / 1000;
 const EXTRACTION_TIMEOUT_MS = Number(process.env.AUDIO_SYNC_EXTRACTION_TIMEOUT_MS) || 240000;
 const FFMPEG_PATH = process.env.FFMPEG_PATH || 'ffmpeg';
+const PARALLEL_READS = Math.max(1, Number(process.env.AUDIO_SYNC_PARALLEL_READS) || 8);
+const MIN_PART_MS = 20000;
 
 function percentile(sortedValues, fraction) {
   if (sortedValues.length === 0) {
@@ -46,7 +48,7 @@ function smooth(values, radius) {
   return result;
 }
 
-function extractSpeechScores(mediaUrl, startMs, durationMs) {
+function readLogEnergies(mediaUrl, startMs, durationMs) {
   return new Promise((resolve, reject) => {
     const httpOptions = /^https?:\/\//i.test(mediaUrl)
       ? ['-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5', '-rw_timeout', '20000000']
@@ -98,16 +100,36 @@ function extractSpeechScores(mediaUrl, startMs, durationMs) {
     ffmpeg.on('close', (code, signal) => {
       clearTimeout(timer);
       const seconds = (logEnergies.length * FRAME_MS) / 1000;
-      if (logEnergies.length < 1500) {
+      if (logEnergies.length < (durationMs / FRAME_MS) * 0.5) {
         reject(new Error(`ffmpeg returned only ${seconds.toFixed(1)}s of audio (code ${code}, signal ${signal}): ${stderrText.trim().slice(0, 300)}`));
         return;
       }
       if (code !== 0) {
         log.debug(() => `[AudioSync] ffmpeg ended with code ${code} after ${seconds.toFixed(1)}s of audio, using what was read`);
       }
-      resolve({ frameMs: FRAME_MS, startMs, scores: toSpeechScores(logEnergies) });
+      resolve(logEnergies);
     });
   });
+}
+
+/*
+ * Reads the window as several parts at once, each ffmpeg seeking to its own
+ * start, because a single Real-Debrid connection is often slower than needed.
+ * Each part is padded or trimmed to its exact frame count so the parts line up.
+ */
+async function extractSpeechScores(mediaUrl, startMs, durationMs) {
+  const partCount = Math.max(1, Math.min(PARALLEL_READS, Math.floor(durationMs / MIN_PART_MS)));
+  const framesPerPart = Math.ceil(durationMs / FRAME_MS / partCount);
+  const parts = await Promise.all(Array.from({ length: partCount }, (unused, partIndex) =>
+    readLogEnergies(mediaUrl, startMs + partIndex * framesPerPart * FRAME_MS, framesPerPart * FRAME_MS)));
+  const logEnergies = [];
+  for (const part of parts) {
+    const fill = part.length ? part[part.length - 1] : 0;
+    for (let frame = 0; frame < framesPerPart; frame++) {
+      logEnergies.push(frame < part.length ? part[frame] : fill);
+    }
+  }
+  return { frameMs: FRAME_MS, startMs, scores: toSpeechScores(logEnergies) };
 }
 
 module.exports = {
