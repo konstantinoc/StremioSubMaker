@@ -6,7 +6,7 @@ const FRAME_MS = 20;
 const SAMPLES_PER_FRAME = (SAMPLE_RATE * FRAME_MS) / 1000;
 const EXTRACTION_TIMEOUT_MS = Number(process.env.AUDIO_SYNC_EXTRACTION_TIMEOUT_MS) || 240000;
 const FFMPEG_PATH = process.env.FFMPEG_PATH || 'ffmpeg';
-const PARALLEL_READS = Math.max(1, Number(process.env.AUDIO_SYNC_PARALLEL_READS) || 1);
+const PARALLEL_READS = Math.max(1, Number(process.env.AUDIO_SYNC_PARALLEL_READS) || 8);
 const MIN_PART_MS = 20000;
 
 function percentile(sortedValues, fraction) {

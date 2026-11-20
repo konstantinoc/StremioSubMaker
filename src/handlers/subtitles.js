@@ -4048,12 +4048,6 @@ function createSubtitleHandler(config) {
         for (const { sourceFileId, targetLang } of autoTranslateTargets) {
           setImmediate(() => {
             handleTranslation(sourceFileId, targetLang, config, { autoTriggered: true, videoSize: audioSyncVideoSize, filename: streamFilename })
-              .then(content => {
-                // A cached translation skips the source download that normally starts the audio sync
-                if (typeof content === 'string' && content.length > 2000) {
-                  audioSync.prepare({ config, videoSize: audioSyncVideoSize, filename: streamFilename, sourceFileId, subtitleContent: content });
-                }
-              })
               .catch(error => {
                 log.warn(() => `[Subtitles] Auto-translate background trigger failed for ${sourceFileId} → ${targetLang}: ${error?.message || error}`);
               });

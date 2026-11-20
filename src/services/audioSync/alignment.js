@@ -1,6 +1,6 @@
 const { isDialogueCue } = require('./subtitleTiming');
 
-const OPENING_WINDOW_MS = (Number(process.env.AUDIO_SYNC_OPENING_SECONDS) || 60) * 1000;
+const OPENING_WINDOW_MS = (Number(process.env.AUDIO_SYNC_OPENING_SECONDS) || 120) * 1000;
 const MAX_OPENING_CUES = 80;
 const MIN_OPENING_CUES = 6;
 const OUT_OF_AUDIO_SCORE = -1;
