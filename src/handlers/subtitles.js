@@ -3560,6 +3560,9 @@ function createSubtitleHandler(config) {
 
       // Add translation buttons for each target language (skip in no-translation mode)
       const translationEntries = [];
+      // Auto-translate mode: (fileId, targetLang) pairs to translate in the
+      // background as soon as the list is served (no user click required)
+      const autoTranslateTargets = [];
       if (!config.noTranslationMode) {
         const translateQueryParts = [];
         if (id) translateQueryParts.push(`videoId=${encodeURIComponent(id)}`);
@@ -3615,14 +3618,31 @@ function createSubtitleHandler(config) {
 
         log.debug(() => `[Subtitles] Found ${sourceSubtitles.length} source language subtitles for translation (providers + embedded)`);
 
+        // Auto-translate mode: exactly ONE entry per target language, built from
+        // the TOP-RANKED source subtitle (sourceSubtitles is already ranked),
+        // carrying a REAL language code so it groups inside the actual language
+        // in the player UI (Stremio and Nuvio). Translation is triggered
+        // automatically when the list is served — see autoTranslateTargets.
+        const autoMode = config.autoTranslateMode === true;
+        const seenAutoLangCodes = new Set();
+
         // For each target language, create a translation entry for each source subtitle
         // Translation entries are created from the already-limited source subtitles (16 per source language)
         for (const targetLang of targetLangsForTranslation) {
           const baseName = getLanguageName(targetLang) || targetLang;
           const displayName = `Make ${baseName}`;
-          log.debug(() => `[Subtitles] Creating translation entries for ${displayName} (${targetLang})`);
+          // Strictly one entry per target language: if two configured target
+          // codes normalize to the same ISO code (e.g. 'es' and 'es-ES'),
+          // keep only the first so the language group stays single-entry.
+          const autoLangCode = normalizeLanguageCode(targetLang) || targetLang;
+          if (autoMode) {
+            if (seenAutoLangCodes.has(autoLangCode)) continue;
+            seenAutoLangCodes.add(autoLangCode);
+          }
+          const sourcesForLang = autoMode ? sourceSubtitles.slice(0, 1) : sourceSubtitles;
+          log.debug(() => `[Subtitles] Creating translation entries for ${displayName} (${targetLang})${autoMode ? ' [auto-translate mode: top source only]' : ''}`);
 
-          for (const [sourceIndex, sourceSub] of sourceSubtitles.entries()) {
+          for (const [sourceIndex, sourceSub] of sourcesForLang.entries()) {
             // Cache source metadata for later history enrichment (Stremio may drop query params)
             try {
               const metaKey = `${config.__configHash || config.userHash || 'default'}:${sourceSub.fileId}`;
@@ -3633,13 +3653,25 @@ function createSubtitleHandler(config) {
               });
             } catch (_) { /* ignore */ }
 
-            const translationEntry = {
-              id: `translate_${sourceSub.fileId}_to_${targetLang}`,
-              lang: displayName, // Display as "Make Language" in Stremio UI
-              label: `${displayName} • ${buildStremioSubtitleVariantLabel(sourceSub, sourceIndex)}`,
-              url: `{{ADDON_URL}}/translate/${sourceSub.fileId}/${targetLang}${translationUrlExtension}${translateQuery}`
-            };
+            const translationEntry = autoMode
+              ? {
+                  id: `translate_${sourceSub.fileId}_to_${targetLang}`,
+                  // Real ISO-639-2 code (same format as provider subtitles) so
+                  // the entry lives INSIDE the target language group
+                  lang: autoLangCode,
+                  label: `AI ${baseName} • ${buildStremioSubtitleVariantLabel(sourceSub, sourceIndex)}`,
+                  url: `{{ADDON_URL}}/translate/${sourceSub.fileId}/${targetLang}${translationUrlExtension}${translateQuery}`
+                }
+              : {
+                  id: `translate_${sourceSub.fileId}_to_${targetLang}`,
+                  lang: displayName, // Display as "Make Language" in Stremio UI
+                  label: `${displayName} • ${buildStremioSubtitleVariantLabel(sourceSub, sourceIndex)}`,
+                  url: `{{ADDON_URL}}/translate/${sourceSub.fileId}/${targetLang}${translationUrlExtension}${translateQuery}`
+                };
             translationEntries.push(translationEntry);
+            if (autoMode) {
+              autoTranslateTargets.push({ sourceFileId: sourceSub.fileId, targetLang });
+            }
           }
         }
 
@@ -3947,9 +3979,13 @@ function createSubtitleHandler(config) {
       }
 
       // Add special action buttons
+      // In auto-translate mode the single per-language translation entries lead
+      // the list so flat UIs (e.g. Nuvio) surface them before native subtitles.
+      const autoTranslateFirst = config.autoTranslateMode === true && translationEntries.length > 0;
       let allSubtitles = [
+        ...(autoTranslateFirst ? translationEntries : []),
         ...stremioSubtitles,
-        ...translationEntries,
+        ...(autoTranslateFirst ? [] : translationEntries),
         ...learnEntries,
         ...xSyncEntries,
         ...autoEntries,
@@ -4000,6 +4036,22 @@ function createSubtitleHandler(config) {
       if (config.__credentialWarningEntry) {
         allSubtitles = [config.__credentialWarningEntry, ...allSubtitles];
         log.debug(() => '[Subtitles] Prepended credential decryption warning entry');
+      }
+
+      // Auto-translate mode: kick off background translations immediately.
+      // handleTranslation is cache-first and in-flight deduped, so repeated
+      // subtitle list requests (Stremio/Nuvio refreshes) never re-translate —
+      // once a translation exists it is served instantly from cache.
+      if (autoTranslateTargets.length > 0) {
+        for (const { sourceFileId, targetLang } of autoTranslateTargets) {
+          setImmediate(() => {
+            handleTranslation(sourceFileId, targetLang, config, { autoTriggered: true })
+              .catch(error => {
+                log.warn(() => `[Subtitles] Auto-translate background trigger failed for ${sourceFileId} → ${targetLang}: ${error?.message || error}`);
+              });
+          });
+        }
+        log.info(() => `[Subtitles] Auto-translate mode: triggered ${autoTranslateTargets.length} background translation(s) for ${id}`);
       }
 
       // Calculate total items for logging (AFTER all entries added including credential warning)
@@ -5187,6 +5239,47 @@ async function handleTranslation(sourceFileId, targetLanguage, config, options =
       return createInvalidSubtitleMessage(reasonText, config.uiLanguage || 'en');
     }
 
+    // === CANONICAL CONTENT-HASH CACHE CHECK ===
+    // Provider fileIds embed ephemeral download tokens (e.g. OpenSubtitles V3
+    // via the strem.io proxy rotates its signed URLs), so the fileId-keyed
+    // cache key can miss even when the EXACT same source subtitle was already
+    // translated on a previous day. Key a second, canonical permanent cache
+    // entry by sha256(source content) + target language so token rotation and
+    // even provider switches still hit the existing translation.
+    let canonicalBaseKey = null;
+    if (allowPermanent && ENABLE_PERMANENT_TRANSLATIONS && !bypass && sourceContent) {
+      try {
+        const canonicalSource = (typeof sourceContent === 'object' && sourceContent !== null)
+          ? String(sourceContent.content || '')
+          : String(sourceContent);
+        if (canonicalSource) {
+          const sourceHash = crypto.createHash('sha256').update(canonicalSource, 'utf8').digest('hex').slice(0, 24);
+          const assPassthrough = config.convertAssToVtt === false && config.forceSRTOutput !== true;
+          canonicalBaseKey = `src_${sourceHash}_${targetLanguage}${assPassthrough ? '_ass' : ''}`;
+          const canonicalCached = await readFromStorage(canonicalBaseKey);
+          if (!canonicalCached) {
+            log.debug(() => `[Translation] Canonical cache MISS (${canonicalBaseKey}, ${canonicalSource.length} chars)`);
+          }
+          if (canonicalCached && canonicalCached.isError !== true &&
+              typeof canonicalCached.content === 'string' && canonicalCached.content.length > 0) {
+            log.info(() => `[Translation] Canonical content-hash cache HIT (${canonicalBaseKey}) — reusing existing translation despite rotated fileId`);
+            cacheMetrics.hits++;
+            // Alias the canonical entry under the current fileId key so the
+            // next request with this fileId hits the fast pre-download path.
+            try {
+              await saveToStorage(baseKey, { ...canonicalCached, key: baseKey }, { allowPermanent });
+            } catch (_) { /* alias save is best-effort */ }
+            updateHistory('completed', { cache: 'canonical' });
+            return canonicalCached.content;
+          }
+        }
+      } catch (hashError) {
+        // Canonical lookup must never block translation — fall through
+        log.debug(() => `[Translation] Canonical cache check skipped: ${hashError?.message || hashError}`);
+        canonicalBaseKey = null;
+      }
+    }
+
     // === START BACKGROUND TRANSLATION ===
     // Mark translation as in progress and start it in background
     log.debug(() => ['[Translation] Not cached and not in-progress; starting translation key=', cacheKey]);
@@ -5204,7 +5297,7 @@ async function handleTranslation(sourceFileId, targetLanguage, config, options =
       sourceFileId,
       targetLanguage,
       config,
-      { cacheKey, runtimeKey, baseKey, sharedInFlightKey },
+      { cacheKey, runtimeKey, baseKey, sharedInFlightKey, canonicalBaseKey },
       effectiveUserHash,
       allowPermanent,
       sourceContent,
@@ -5290,7 +5383,7 @@ async function handleTranslation(sourceFileId, targetLanguage, config, options =
  * @param {string} userHash - User hash for concurrency tracking
  * @param {string} preDownloadedContent - Optional pre-downloaded source content (from pre-flight validation)
  */
-async function performTranslation(sourceFileId, targetLanguage, config, { cacheKey, runtimeKey, baseKey, sharedInFlightKey = null }, userHash, allowPermanent, preDownloadedContent = null, embeddedSource = null) {
+async function performTranslation(sourceFileId, targetLanguage, config, { cacheKey, runtimeKey, baseKey, sharedInFlightKey = null, canonicalBaseKey = null }, userHash, allowPermanent, preDownloadedContent = null, embeddedSource = null) {
   let translationEngine = null;
   // Hoisted so the catch block can include them in error translationStats for history correction
   let providerName = '';
@@ -5768,6 +5861,17 @@ async function performTranslation(sourceFileId, targetLanguage, config, { cacheK
         isComplete: true
       };
       await saveToStorage(baseKey, cachedData, { allowPermanent });
+      // Canonical content-hash alias: lets future requests with rotated
+      // provider tokens (or the same file from another provider) reuse this
+      // translation without re-translating.
+      if (canonicalBaseKey) {
+        try {
+          await saveToStorage(canonicalBaseKey, { ...cachedData, key: canonicalBaseKey }, { allowPermanent });
+          log.debug(() => `[Translation] Saved canonical content-hash alias: ${canonicalBaseKey}`);
+        } catch (canonicalError) {
+          log.debug(() => `[Translation] Failed to save canonical cache alias: ${canonicalError?.message || canonicalError}`);
+        }
+      }
     } else {
       log.debug(() => `[Translation] Skipped permanent cache write (allow=${allowPermanent}, flag=${ENABLE_PERMANENT_TRANSLATIONS}, persistent=${cacheConfig.persistent !== false}, enabled=${cacheConfig.enabled})`);
     }

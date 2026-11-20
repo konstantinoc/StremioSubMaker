@@ -1465,6 +1465,7 @@ Translate to {target_language}.`;
             convertAssToVtt: true, // If true, convert ASS/SSA subtitles to VTT (default: enabled for backwards compatibility)
             androidSubtitleCompatMode: 'off', // Dev mode only: 'off' | 'safe' | 'aggressive'
             mobileMode: false, // Opt-in: wait for full translation before responding (no automatic device detection)
+            autoTranslateMode: false, // One auto-translated entry per target language; translation starts when the list is served
             singleBatchMode: false, // Try translating whole file at once
             advancedSettings: {
                 enabled: false, // Auto-set to true if any setting differs from defaults (forces bypass cache)
@@ -3913,6 +3914,7 @@ Translate to {target_language}.`;
         currentConfig.learnTargetLanguages = normalizeLanguageCodes(currentConfig.learnTargetLanguages || []);
         currentConfig.learnPlacement = 'top';
         currentConfig.mobileMode = currentConfig.mobileMode === true;
+        currentConfig.autoTranslateMode = currentConfig.autoTranslateMode === true;
         currentConfig.excludeHearingImpairedSubtitles = currentConfig.excludeHearingImpairedSubtitles === true;
         enforceLanguageLimits();
         updateLanguageLimitCopy();
@@ -5925,6 +5927,7 @@ Translate to {target_language}.`;
         currentConfig.learnTargetLanguages = normalizeLanguageCodes(currentConfig.learnTargetLanguages || []);
         currentConfig.learnPlacement = 'top';
         currentConfig.mobileMode = currentConfig.mobileMode === true;
+        currentConfig.autoTranslateMode = currentConfig.autoTranslateMode === true;
         currentConfig.excludeHearingImpairedSubtitles = currentConfig.excludeHearingImpairedSubtitles === true;
         enforceLanguageLimits();
         updateLanguageLimitCopy();
@@ -9878,7 +9881,7 @@ Translate to {target_language}.`;
         const workflowGroup = getTranslationWorkflowContainer();
         if (workflowGroup) groupsToHide.push(workflowGroup);
 
-        ['databaseMode', 'learnModeEnabled', 'mobileMode', 'singleBatchMode', 'betaMode'].forEach(id => {
+        ['databaseMode', 'learnModeEnabled', 'mobileMode', 'autoTranslateMode', 'singleBatchMode', 'betaMode'].forEach(id => {
             const group = document.getElementById(id)?.closest('.form-group');
             if (group) groupsToHide.push(group);
         });
@@ -10737,6 +10740,7 @@ Translate to {target_language}.`;
             newConfig.bypassCache = oldConfig.bypassCache === true;
             // - mobile mode
             newConfig.mobileMode = oldConfig.mobileMode === true;
+            newConfig.autoTranslateMode = oldConfig.autoTranslateMode === true;
             // - single-batch mode
             newConfig.singleBatchMode = oldConfig.singleBatchMode === true;
             // - exclude HI/SDH subtitles
@@ -11055,6 +11059,8 @@ Translate to {target_language}.`;
         if (hiExcludeElNoTranslation) hiExcludeElNoTranslation.checked = hiExcludeEnabled;
         const mobileModeEl = document.getElementById('mobileMode');
         if (mobileModeEl) mobileModeEl.checked = currentConfig.mobileMode === true;
+        const autoTranslateModeEl = document.getElementById('autoTranslateMode');
+        if (autoTranslateModeEl) autoTranslateModeEl.checked = currentConfig.autoTranslateMode === true;
         const singleBatchEl = document.getElementById('singleBatchMode');
         if (singleBatchEl) singleBatchEl.checked = currentConfig.singleBatchMode === true;
         const forceSRTEl = document.getElementById('forceSRTOutput');
@@ -11237,6 +11243,18 @@ Translate to {target_language}.`;
         } else {
             // If the toggle isn't present, preserve existing value in state
             currentConfig.mobileMode = currentConfig.mobileMode === true;
+        }
+
+        // Track auto-translate mode toggle in state
+        const autoTranslateToggle = document.getElementById('autoTranslateMode');
+        if (autoTranslateToggle) {
+            autoTranslateToggle.checked = currentConfig.autoTranslateMode === true;
+            autoTranslateToggle.onchange = (e) => {
+                currentConfig.autoTranslateMode = e.target.checked;
+            };
+        } else {
+            // If the toggle isn't present, preserve existing value in state
+            currentConfig.autoTranslateMode = currentConfig.autoTranslateMode === true;
         }
 
         // Track HI/SDH exclusion toggles (keep both in sync)
@@ -11526,6 +11544,11 @@ Translate to {target_language}.`;
                 const el = document.getElementById('mobileMode');
                 if (el) return el.checked;
                 return currentConfig?.mobileMode === true;
+            })(),
+            autoTranslateMode: (function () {
+                const el = document.getElementById('autoTranslateMode');
+                if (el) return el.checked;
+                return currentConfig?.autoTranslateMode === true;
             })(),
             singleBatchMode: singleBatchEnabled,
             parallelBatchesEnabled: (function () { const el = document.getElementById('parallelBatchesEnabled'); return el ? el.checked === true : false; })(),

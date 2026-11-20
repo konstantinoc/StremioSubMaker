@@ -1407,6 +1407,10 @@
           "instructionsLink": "Read instructions",
           "tools": "Tools: SRT Files Translation, Embedded Subs Extraction, AutoSync and AutoSubbing."
         },
+        "autoTranslate": {
+          "label": "Auto-Translate Mode (one per language)",
+          "description": "Returns exactly ONE subtitle entry per target language — inside the language's own group — and starts translating it automatically as soon as the subtitle list loads, without clicking anything. Uses the best-matching source subtitle. Uses AI tokens on every new playback."
+        },
         "mobileMode": {
           "label": "Mobile Mode (fix/workaround)",
           "description": "Stremio makes only 1 request for subtitles and caches it, so subtitles in Android can't be partially delivered. Mobile Mode holds translation requests and sends the final subtitle only when ready. Use this if you're watching on Android/iOS. No partial translations, no loading messages. Might freeze the stream until translation is ready. Flash-lite recommended. Wait 1-3 min, if it doesn't load automatically switch subtitles back and forth to load the translation."

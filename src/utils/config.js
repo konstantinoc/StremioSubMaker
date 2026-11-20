@@ -1317,6 +1317,11 @@ function getDefaultConfig(modelName = null) {
 
   return {
     noTranslationMode: false, // If true, skip translation and just fetch subtitles
+    // Auto-translate mode: return exactly ONE translation entry per target
+    // language, with a real language code (groups inside the language in the
+    // player UI instead of a "Make X" pseudo-group), and start translating it
+    // automatically as soon as the subtitle list is served — no click needed.
+    autoTranslateMode: false,
     noTranslationLanguages: [], // Languages to fetch when in no-translation mode
     sourceLanguages: [],
     targetLanguages: [],

@@ -1,0 +1,13 @@
+{
+  "watch": [
+    "index.js",
+    "src",
+    "public",
+    "locales"
+  ],
+  "ext": "js,json,html,css",
+  "ignore": [
+    "src/**/*.test.js"
+  ],
+  "delay": 1500
+}
