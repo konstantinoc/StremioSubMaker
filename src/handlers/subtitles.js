@@ -29,6 +29,7 @@ const { resolveLocalSubtitleHashes, persistLocalHashAssociations } = require('..
 const { StorageFactory, StorageAdapter } = require('../storage');
 const { getCached: getDownloadCached, saveCached: saveDownloadCached } = require('../utils/downloadCache');
 const log = require('../utils/logger');
+const audioSync = require('../services/audioSync');
 const { handleCaughtError } = require('../utils/errorClassifier');
 const { isHearingImpairedSubtitle } = require('../utils/subtitleFlags');
 const { generateCacheKeys } = require('../utils/cacheKeys');
@@ -3044,6 +3045,7 @@ function createSubtitleHandler(config) {
         ? (typeof extra.videoSize === 'number' && extra.videoSize > 0 ? extra.videoSize
           : (typeof extra.videoSize === 'string' && /^\d+$/.test(extra.videoSize) ? parseInt(extra.videoSize, 10) : null))
         : null;
+      const audioSyncVideoSize = /^\d+$/.test(String(extra?.videoSize || '')) ? Number(extra.videoSize) : null;
 
       if (hasRealStremioHash) {
         log.debug(() => `[Subtitles] Real Stremio videoHash available: ${extra.videoHash.substring(0, 8)}...${validVideoSize ? ` (size: ${validVideoSize})` : ''} - SCS hash matching enabled`);
@@ -3568,7 +3570,7 @@ function createSubtitleHandler(config) {
         if (id) translateQueryParts.push(`videoId=${encodeURIComponent(id)}`);
         if (streamFilename) translateQueryParts.push(`filename=${encodeURIComponent(streamFilename)}`);
         if (hasRealStremioHash) translateQueryParts.push(`videoHash=${encodeURIComponent(extra.videoHash)}`);
-        if (validVideoSize) translateQueryParts.push(`videoSize=${encodeURIComponent(String(validVideoSize))}`);
+        if (validVideoSize || audioSyncVideoSize) translateQueryParts.push(`videoSize=${encodeURIComponent(String(validVideoSize || audioSyncVideoSize))}`);
         const translateQuery = translateQueryParts.length ? `?${translateQueryParts.join('&')}` : '';
 
 
@@ -4045,7 +4047,7 @@ function createSubtitleHandler(config) {
       if (autoTranslateTargets.length > 0) {
         for (const { sourceFileId, targetLang } of autoTranslateTargets) {
           setImmediate(() => {
-            handleTranslation(sourceFileId, targetLang, config, { autoTriggered: true })
+            handleTranslation(sourceFileId, targetLang, config, { autoTriggered: true, videoSize: audioSyncVideoSize, filename: streamFilename })
               .catch(error => {
                 log.warn(() => `[Subtitles] Auto-translate background trigger failed for ${sourceFileId} → ${targetLang}: ${error?.message || error}`);
               });
@@ -5227,6 +5229,7 @@ async function handleTranslation(sourceFileId, targetLanguage, config, options =
       }
 
       log.debug(() => `[Translation] Pre-flight validation passed: ${sourceContent.length} bytes`);
+      audioSync.prepare({ config, videoSize: options.videoSize, sourceFileId, subtitleContent: sourceContent });
 
     } catch (error) {
       if (!error || !error._alreadyLogged) {

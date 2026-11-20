@@ -1407,6 +1407,10 @@
           "instructionsLink": "Read instructions",
           "tools": "Tools: SRT Files Translation, Embedded Subs Extraction, AutoSync and AutoSubbing."
         },
+        "audioAutoSync": {
+          "label": "Audio Auto-Sync (Real-Debrid)",
+          "description": "Re-times translated subtitles to the audio of the Real-Debrid stream you are playing: the opening dialogue is matched to where speech starts, and the whole subtitle is shifted by the same amount. Needs ffmpeg and REALDEBRID_API_KEY on the server."
+        },
         "autoTranslate": {
           "label": "Auto-Translate Mode (one per language)",
           "description": "Returns exactly ONE subtitle entry per target language — inside the language's own group — and starts translating it automatically as soon as the subtitle list loads, without clicking anything. Uses the best-matching source subtitle. Uses AI tokens on every new playback."

@@ -937,6 +937,7 @@ function normalizeConfig(config) {
 
   // Normalize mobile mode flag
   mergedConfig.mobileMode = mergedConfig.mobileMode === true;
+  mergedConfig.audioAutoSyncMode = mergedConfig.audioAutoSyncMode === true;
 
   // Show all Gemini API configs that will be used (throttled to avoid spam on polling endpoints)
   logGeminiConfigThrottled(mergedConfig);
@@ -1322,6 +1323,7 @@ function getDefaultConfig(modelName = null) {
     // player UI instead of a "Make X" pseudo-group), and start translating it
     // automatically as soon as the subtitle list is served — no click needed.
     autoTranslateMode: false,
+    audioAutoSyncMode: false,
     noTranslationLanguages: [], // Languages to fetch when in no-translation mode
     sourceLanguages: [],
     targetLanguages: [],

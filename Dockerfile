@@ -2,7 +2,7 @@
 FROM node:24.22.1-alpine3.24
 
 # Install su-exec for privilege dropping and tzdata for IANA timezone support
-RUN apk add --no-cache su-exec tzdata
+RUN apk add --no-cache su-exec tzdata ffmpeg
 
 # Set working directory
 WORKDIR /app

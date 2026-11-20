@@ -3,6 +3,7 @@ require('dotenv').config();
 
 // Load logger utility first to intercept all console methods with timestamps
 const log = require('./src/utils/logger');
+const audioSync = require('./src/services/audioSync');
 
 // Initialize Sentry for error tracking (must be early to catch all errors)
 // Set SENTRY_DSN in environment to enable
@@ -5485,6 +5486,7 @@ app.get('/addon/:config/translate/:sourceFileId/:targetLang', normalizeSubtitleF
 
         // Create deduplication key based on source file and target language
         const dedupKey = `translate:${configKey}:${sourceFileId}:${targetLang}`;
+        const audioSyncContext = { config, videoSize: req.query.videoSize, sourceFileId };
 
         // Unusual purge: if same translated subtitle is loaded 3 times in < 5s, purge and retrigger
         // SAFETY BLOCK: Only purge if translation is NOT currently in progress
@@ -5589,7 +5591,7 @@ app.get('/addon/:config/translate/:sourceFileId/:targetLang', normalizeSubtitleF
                 res.setHeader('Content-Type', 'text/plain; charset=utf-8');
                 res.setHeader('Content-Disposition', `attachment; filename="translating_${targetLang}.srt"`);
                 setSubtitleCacheHeaders(res, 'loading');
-                return res.send(partialCached.content);
+                return res.send(await audioSync.applyToContent(partialCached.content, { ...audioSyncContext, isFinal: false }));
             }
 
             // Then check bypass cache for user-controlled bypass cache behavior
@@ -5624,7 +5626,7 @@ app.get('/addon/:config/translate/:sourceFileId/:targetLang', normalizeSubtitleF
                         res.setHeader('Content-Type', (bIsAss || bIsSsa) ? 'text/x-ssa; charset=utf-8' : 'text/plain; charset=utf-8');
                         res.setHeader('Content-Disposition', `attachment; filename="translated_${targetLang}.${bExt}"`);
                         setSubtitleCacheHeaders(res, 'final');
-                        return res.send(bypassCached.content);
+                        return res.send(await audioSync.applyToContent(bypassCached.content, { ...audioSyncContext, isFinal: true }));
                     }
                 }
             }
@@ -5653,7 +5655,7 @@ app.get('/addon/:config/translate/:sourceFileId/:targetLang', normalizeSubtitleF
                         res.setHeader('Content-Type', (pIsAss || pIsSsa) ? 'text/x-ssa; charset=utf-8' : 'text/plain; charset=utf-8');
                         res.setHeader('Content-Disposition', `attachment; filename="translated_${targetLang}.${pExt}"`);
                         setSubtitleCacheHeaders(res, 'final');
-                        return res.send(permanentCached.content);
+                        return res.send(await audioSync.applyToContent(permanentCached.content, { ...audioSyncContext, isFinal: true }));
                     }
                 }
             }
@@ -5685,6 +5687,7 @@ app.get('/addon/:config/translate/:sourceFileId/:targetLang', normalizeSubtitleF
                     sourceFileId,
                     targetLanguage: targetLang,
                     filename: req.query.filename || req.query.file || req.query.name || '',
+                    videoSize: req.query.videoSize,
                     videoId: req.query.videoId || req.query.id || '',
                     sourceLanguage: req.query.sourceLanguage || req.query.lang || (config.sourceLanguages?.[0] || 'auto'),
                     from: 'addon'
@@ -5739,7 +5742,9 @@ app.get('/addon/:config/translate/:sourceFileId/:targetLang', normalizeSubtitleF
             log.debug(() => `[Translation] Set no-store headers for final translation`);
         }
 
-        const responseContent = maybeConvertToSRT(subtitleContent, config);
+        const responseContent = isLoadingMessage
+            ? maybeConvertToSRT(subtitleContent, config)
+            : await audioSync.applyToContent(maybeConvertToSRT(subtitleContent, config), { ...audioSyncContext, isFinal: !isPartialMessage });
         if (res.headersSent) res.end(responseContent);
         else res.send(responseContent);
         log.debug(() => `[Translation] Response sent successfully for ${sourceFileId}`);

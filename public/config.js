@@ -1466,6 +1466,7 @@ Translate to {target_language}.`;
             androidSubtitleCompatMode: 'off', // Dev mode only: 'off' | 'safe' | 'aggressive'
             mobileMode: false, // Opt-in: wait for full translation before responding (no automatic device detection)
             autoTranslateMode: false, // One auto-translated entry per target language; translation starts when the list is served
+            audioAutoSyncMode: false,
             singleBatchMode: false, // Try translating whole file at once
             advancedSettings: {
                 enabled: false, // Auto-set to true if any setting differs from defaults (forces bypass cache)
@@ -3915,6 +3916,7 @@ Translate to {target_language}.`;
         currentConfig.learnPlacement = 'top';
         currentConfig.mobileMode = currentConfig.mobileMode === true;
         currentConfig.autoTranslateMode = currentConfig.autoTranslateMode === true;
+        currentConfig.audioAutoSyncMode = currentConfig.audioAutoSyncMode === true;
         currentConfig.excludeHearingImpairedSubtitles = currentConfig.excludeHearingImpairedSubtitles === true;
         enforceLanguageLimits();
         updateLanguageLimitCopy();
@@ -5928,6 +5930,7 @@ Translate to {target_language}.`;
         currentConfig.learnPlacement = 'top';
         currentConfig.mobileMode = currentConfig.mobileMode === true;
         currentConfig.autoTranslateMode = currentConfig.autoTranslateMode === true;
+        currentConfig.audioAutoSyncMode = currentConfig.audioAutoSyncMode === true;
         currentConfig.excludeHearingImpairedSubtitles = currentConfig.excludeHearingImpairedSubtitles === true;
         enforceLanguageLimits();
         updateLanguageLimitCopy();
@@ -9881,7 +9884,7 @@ Translate to {target_language}.`;
         const workflowGroup = getTranslationWorkflowContainer();
         if (workflowGroup) groupsToHide.push(workflowGroup);
 
-        ['databaseMode', 'learnModeEnabled', 'mobileMode', 'autoTranslateMode', 'singleBatchMode', 'betaMode'].forEach(id => {
+        ['databaseMode', 'learnModeEnabled', 'mobileMode', 'autoTranslateMode', 'audioAutoSyncMode', 'singleBatchMode', 'betaMode'].forEach(id => {
             const group = document.getElementById(id)?.closest('.form-group');
             if (group) groupsToHide.push(group);
         });
@@ -10741,6 +10744,7 @@ Translate to {target_language}.`;
             // - mobile mode
             newConfig.mobileMode = oldConfig.mobileMode === true;
             newConfig.autoTranslateMode = oldConfig.autoTranslateMode === true;
+            newConfig.audioAutoSyncMode = oldConfig.audioAutoSyncMode === true;
             // - single-batch mode
             newConfig.singleBatchMode = oldConfig.singleBatchMode === true;
             // - exclude HI/SDH subtitles
@@ -11061,6 +11065,8 @@ Translate to {target_language}.`;
         if (mobileModeEl) mobileModeEl.checked = currentConfig.mobileMode === true;
         const autoTranslateModeEl = document.getElementById('autoTranslateMode');
         if (autoTranslateModeEl) autoTranslateModeEl.checked = currentConfig.autoTranslateMode === true;
+        const audioAutoSyncModeEl = document.getElementById('audioAutoSyncMode');
+        if (audioAutoSyncModeEl) audioAutoSyncModeEl.checked = currentConfig.audioAutoSyncMode === true;
         const singleBatchEl = document.getElementById('singleBatchMode');
         if (singleBatchEl) singleBatchEl.checked = currentConfig.singleBatchMode === true;
         const forceSRTEl = document.getElementById('forceSRTOutput');
@@ -11255,6 +11261,16 @@ Translate to {target_language}.`;
         } else {
             // If the toggle isn't present, preserve existing value in state
             currentConfig.autoTranslateMode = currentConfig.autoTranslateMode === true;
+        }
+
+        const audioAutoSyncToggle = document.getElementById('audioAutoSyncMode');
+        if (audioAutoSyncToggle) {
+            audioAutoSyncToggle.checked = currentConfig.audioAutoSyncMode === true;
+            audioAutoSyncToggle.onchange = (e) => {
+                currentConfig.audioAutoSyncMode = e.target.checked;
+            };
+        } else {
+            currentConfig.audioAutoSyncMode = currentConfig.audioAutoSyncMode === true;
         }
 
         // Track HI/SDH exclusion toggles (keep both in sync)
@@ -11549,6 +11565,11 @@ Translate to {target_language}.`;
                 const el = document.getElementById('autoTranslateMode');
                 if (el) return el.checked;
                 return currentConfig?.autoTranslateMode === true;
+            })(),
+            audioAutoSyncMode: (function () {
+                const el = document.getElementById('audioAutoSyncMode');
+                if (el) return el.checked;
+                return currentConfig?.audioAutoSyncMode === true;
             })(),
             singleBatchMode: singleBatchEnabled,
             parallelBatchesEnabled: (function () { const el = document.getElementById('parallelBatchesEnabled'); return el ? el.checked === true : false; })(),
