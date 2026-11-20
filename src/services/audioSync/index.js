@@ -1,15 +1,14 @@
 const { LRUCache } = require('lru-cache');
 const log = require('../../utils/logger');
 const { parseCues, shiftSubtitleContent } = require('./subtitleTiming');
-const { MIN_OPENING_CUES, selectOpeningDialogue, audioWindowMs, findOffset, findEarlyOffset } = require('./alignment');
-const { streamSpeech } = require('./speechDetector');
+const { MIN_OPENING_CUES, selectOpeningDialogue, audioWindowMs, findOffset } = require('./alignment');
+const { extractSpeechScores } = require('./speechDetector');
 const { findStream } = require('./realDebridLocator');
 
-const MAX_SHIFT_MS = (Number(process.env.AUDIO_SYNC_MAX_SHIFT_SECONDS) || 10) * 1000;
+const MAX_SHIFT_MS = (Number(process.env.AUDIO_SYNC_MAX_SHIFT_SECONDS) || 60) * 1000;
 const MAX_AUDIO_MS = (Number(process.env.AUDIO_SYNC_MAX_AUDIO_SECONDS) || 900) * 1000;
 const FINAL_WAIT_MS = Number(process.env.AUDIO_SYNC_WAIT_MS) || 45000;
 const MIN_APPLIED_OFFSET_MS = 100;
-const STABLE_OFFSET_TOLERANCE_MS = 60;
 
 const offsetsByKey = new LRUCache({ max: 1000, ttl: 24 * 60 * 60 * 1000 });
 const pendingByKey = new Map();
@@ -60,22 +59,13 @@ async function computeOffset(video, subtitleContent) {
   const window = audioWindowMs(openingCues, MAX_SHIFT_MS);
   const durationMs = Math.min(MAX_AUDIO_MS, window.durationMs);
   const startedAt = Date.now();
-  log.warn(() => `[AudioSync] Streaming up to ${Math.round(durationMs / 1000)}s of audio from ${(window.startMs / 1000).toFixed(0)}s in ` +
+  log.warn(() => `[AudioSync] Reading ${Math.round(durationMs / 1000)}s of audio from ${(window.startMs / 1000).toFixed(0)}s in ` +
     `${stream.filename || 'Real-Debrid stream'} (found by ${stream.matchedBy})`);
-  let previousCandidate = null;
-  const { earlyResult, speech, readMs, openedMs, firstAudioMs, reconnects, detector } = await streamSpeech(stream.url, window.startMs, durationMs, (speechSoFar) => {
-    const candidate = findEarlyOffset(openingCues, speechSoFar, MAX_SHIFT_MS);
-    const stable = candidate && previousCandidate &&
-      Math.abs(candidate.offsetMs - previousCandidate.offsetMs) <= STABLE_OFFSET_TOLERANCE_MS;
-    previousCandidate = candidate;
-    return stable ? candidate : null;
-  });
-  const result = earlyResult || findOffset(openingCues, speech, MAX_SHIFT_MS);
+  const speech = await extractSpeechScores(stream.url, window.startMs, durationMs);
+  const result = findOffset(openingCues, speech, MAX_SHIFT_MS);
   log.warn(() => `[AudioSync] ${stream.filename || 'stream'}: first dialogue at ${(openingCues[0].start / 1000).toFixed(2)}s, ` +
     `offset ${result.offsetMs === null ? 'none' : `${result.offsetMs}ms`} (${result.reason || 'matched'}, ` +
-    `score ${result.scorePerFrame}, margin ${result.marginPerFrame}, ${result.cues} lines, ` +
-    `${earlyResult ? 'stopped early' : 'full window'} after ${(readMs / 1000).toFixed(0)}s of audio, ` +
-    `${detector}, file opened after ${openedMs}ms, first audio after ${firstAudioMs}ms, ${reconnects} reconnects, ${Date.now() - startedAt}ms total)`);
+    `score ${result.scorePerFrame}, margin ${result.marginPerFrame}, ${result.cues} lines, ${Date.now() - startedAt}ms)`);
   return { ...result, offsetMs: result.offsetMs ?? 0 };
 }
 

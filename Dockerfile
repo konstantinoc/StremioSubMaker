@@ -1,12 +1,8 @@
 # Pin the Node.js patch release containing the Brotli decoder security fix.
-# Debian slim rather than Alpine: onnxruntime-node (Silero VAD for audio sync)
-# ships glibc binaries only.
-FROM node:24.22.1-slim
+FROM node:24.22.1-alpine3.24
 
-# gosu for privilege dropping, tzdata for IANA timezone support, ffmpeg for audio sync
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends gosu tzdata ffmpeg ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+# Install su-exec for privilege dropping and tzdata for IANA timezone support
+RUN apk add --no-cache su-exec tzdata ffmpeg
 
 # Set working directory
 WORKDIR /app
@@ -14,8 +10,7 @@ WORKDIR /app
 # Install dependencies first (for better caching). Include project npm policy
 # so production installs enforce the reviewed lifecycle-script allowlist.
 COPY package*.json .npmrc ./
-RUN npm ci --omit=dev \
-    && rm -rf node_modules/onnxruntime-node/bin/napi-v*/darwin node_modules/onnxruntime-node/bin/napi-v*/win32
+RUN npm ci --omit=dev
 
 # Copy application code
 COPY . .
@@ -43,7 +38,7 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # NOTE: We intentionally do NOT set USER here.
 # The entrypoint starts as root, fixes bind-mount directory ownership
 # to PUID:PGID (default 1000:1000 = node), then drops privileges via
-# gosu before starting the application. This is the standard Docker
+# su-exec before starting the application. This is the standard Docker
 # pattern (used by postgres, redis, etc.) and handles the common case
 # where Docker creates bind-mount directories as root on the host.
 #

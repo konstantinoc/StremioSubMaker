@@ -7,7 +7,7 @@ set -e
 # Handles two scenarios:
 #   1. Running as root (default, no `user:` in compose):
 #      Creates directories, fixes ownership to PUID:PGID, drops privileges
-#      via gosu, then execs the main command as the target user.
+#      via su-exec, then execs the main command as the target user.
 #
 #   2. Running as non-root (via `user: PUID:PGID` in compose):
 #      Best-effort directory creation and write-access checks with
@@ -52,7 +52,7 @@ if [ "$(id -u)" = "0" ]; then
   chown -R "$TARGET_UID:$TARGET_GID" /app/.cache /app/data /app/logs /app/keys
 
   # Drop to target user and re-exec this script (enters non-root path)
-  exec gosu "$TARGET_UID:$TARGET_GID" "$0" "$@"
+  exec su-exec "$TARGET_UID:$TARGET_GID" "$0" "$@"
 fi
 
 # ── NON-ROOT PATH: best-effort create + verify ─────────────────────
