@@ -52,6 +52,7 @@
     "jszip": "^3.10.1",
     "lru-cache": "^11.2.2",
     "node-unrar-js": "^2.0.2",
+    "onnxruntime-node": "^1.31.1",
     "playwright-core": "^1.57.0",
     "rate-limit-redis": "^6.0.1",
     "srt-parser-2": "^1.2.3",
@@ -74,6 +75,7 @@
   },
   "allowScripts": {
     "fsevents@2.3.3": true,
-    "thread-sleep-compat": false
+    "thread-sleep-compat": false,
+    "onnxruntime-node": false
   }
 }
