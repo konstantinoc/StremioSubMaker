@@ -1,5 +1,6 @@
 const { spawn } = require('child_process');
 const log = require('../../utils/logger');
+const { createVadStream } = require('./vadScorer');
 
 const SAMPLE_RATE = 16000;
 const FRAME_MS = 20;
@@ -8,6 +9,7 @@ const EXTRACTION_TIMEOUT_MS = Number(process.env.AUDIO_SYNC_EXTRACTION_TIMEOUT_M
 const FFMPEG_PATH = process.env.FFMPEG_PATH || 'ffmpeg';
 const PARALLEL_READS = Math.max(1, Number(process.env.AUDIO_SYNC_PARALLEL_READS) || 8);
 const MIN_PART_MS = 20000;
+const VAD_FRAME_MS = 32;
 
 function percentile(sortedValues, fraction) {
   if (sortedValues.length === 0) {
@@ -48,7 +50,7 @@ function smooth(values, radius) {
   return result;
 }
 
-function readLogEnergies(mediaUrl, startMs, durationMs) {
+function readPart(mediaUrl, startMs, durationMs, useVad) {
   return new Promise((resolve, reject) => {
     const httpOptions = /^https?:\/\//i.test(mediaUrl)
       ? ['-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5', '-rw_timeout', '20000000']
@@ -61,11 +63,12 @@ function readLogEnergies(mediaUrl, startMs, durationMs) {
       '-t', (durationMs / 1000).toFixed(3),
       '-map', '0:a:0?', '-vn', '-sn', '-dn',
       '-ac', '1', '-ar', String(SAMPLE_RATE),
-      '-af', 'highpass=f=250,lowpass=f=3500',
+      ...(useVad ? [] : ['-af', 'highpass=f=250,lowpass=f=3500']),
       '-f', 's16le', 'pipe:1'
     ];
     const ffmpeg = spawn(FFMPEG_PATH, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     const logEnergies = [];
+    const pcmBuffers = [];
     let carry = Buffer.alloc(0);
     let stderrText = '';
 
@@ -74,6 +77,10 @@ function readLogEnergies(mediaUrl, startMs, durationMs) {
     }, EXTRACTION_TIMEOUT_MS);
 
     ffmpeg.stdout.on('data', (chunk) => {
+      if (useVad) {
+        pcmBuffers.push(chunk);
+        return;
+      }
       const buffer = carry.length ? Buffer.concat([carry, chunk]) : chunk;
       const frameBytes = SAMPLES_PER_FRAME * 2;
       const frameCount = Math.floor(buffer.length / frameBytes);
@@ -99,6 +106,16 @@ function readLogEnergies(mediaUrl, startMs, durationMs) {
     });
     ffmpeg.on('close', (code, signal) => {
       clearTimeout(timer);
+      if (useVad) {
+        const pcm = Buffer.concat(pcmBuffers);
+        const seconds = pcm.length / 2 / SAMPLE_RATE;
+        if (seconds * 1000 < durationMs * 0.5) {
+          reject(new Error(`ffmpeg returned only ${seconds.toFixed(1)}s of audio (code ${code}, signal ${signal}): ${stderrText.trim().slice(0, 300)}`));
+          return;
+        }
+        resolve(pcm);
+        return;
+      }
       const seconds = (logEnergies.length * FRAME_MS) / 1000;
       if (logEnergies.length < (durationMs / FRAME_MS) * 0.5) {
         reject(new Error(`ffmpeg returned only ${seconds.toFixed(1)}s of audio (code ${code}, signal ${signal}): ${stderrText.trim().slice(0, 300)}`));
@@ -117,19 +134,44 @@ function readLogEnergies(mediaUrl, startMs, durationMs) {
  * start, because a single Real-Debrid connection is often slower than needed.
  * Each part is padded or trimmed to its exact frame count so the parts line up.
  */
+/** Voice score per 32 ms chunk of one part, from its own Silero VAD stream. */
+async function voiceScores(pcm) {
+  const vad = await createVadStream();
+  const chunkCount = Math.floor(pcm.length / 2 / vad.chunkSamples);
+  const scores = new Float32Array(chunkCount);
+  for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex++) {
+    const chunk = new Float32Array(vad.chunkSamples);
+    const base = chunkIndex * vad.chunkSamples * 2;
+    for (let sample = 0; sample < vad.chunkSamples; sample++) {
+      chunk[sample] = pcm.readInt16LE(base + sample * 2) / 32768;
+    }
+    scores[chunkIndex] = (await vad.probability(chunk) - 0.5) * 3;
+  }
+  return scores;
+}
+
 async function extractSpeechScores(mediaUrl, startMs, durationMs) {
+  const useVad = process.env.AUDIO_SYNC_DETECTOR !== 'loudness' && Boolean(await createVadStream());
+  const frameMs = useVad ? VAD_FRAME_MS : FRAME_MS;
   const partCount = Math.max(1, Math.min(PARALLEL_READS, Math.floor(durationMs / MIN_PART_MS)));
-  const framesPerPart = Math.ceil(durationMs / FRAME_MS / partCount);
-  const parts = await Promise.all(Array.from({ length: partCount }, (unused, partIndex) =>
-    readLogEnergies(mediaUrl, startMs + partIndex * framesPerPart * FRAME_MS, framesPerPart * FRAME_MS)));
-  const logEnergies = [];
+  const framesPerPart = Math.ceil(durationMs / frameMs / partCount);
+  const parts = await Promise.all(Array.from({ length: partCount }, async (unused, partIndex) => {
+    const part = await readPart(mediaUrl, startMs + partIndex * framesPerPart * frameMs, framesPerPart * frameMs, useVad);
+    return useVad ? voiceScores(part) : part;
+  }));
+  const values = [];
   for (const part of parts) {
     const fill = part.length ? part[part.length - 1] : 0;
     for (let frame = 0; frame < framesPerPart; frame++) {
-      logEnergies.push(frame < part.length ? part[frame] : fill);
+      values.push(frame < part.length ? part[frame] : fill);
     }
   }
-  return { frameMs: FRAME_MS, startMs, scores: toSpeechScores(logEnergies) };
+  return {
+    frameMs,
+    startMs,
+    scores: useVad ? Float32Array.from(values) : toSpeechScores(values),
+    detector: useVad ? 'Silero VAD' : 'loudness'
+  };
 }
 
 module.exports = {

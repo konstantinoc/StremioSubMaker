@@ -79,6 +79,23 @@ test('refuses to shift when the audio has no speech pattern', () => {
   assert.equal(result.offsetMs, null);
 });
 
+test('Silero VAD hears no voice in silence or a steady tone', async () => {
+  const { createVadStream } = require('./vadScorer');
+  const vad = await createVadStream();
+  assert.ok(vad, 'Silero VAD did not load');
+  let highest = 0;
+  for (let chunkIndex = 0; chunkIndex < 60; chunkIndex++) {
+    const chunk = new Float32Array(vad.chunkSamples);
+    if (chunkIndex >= 30) {
+      for (let sample = 0; sample < chunk.length; sample++) {
+        chunk[sample] = 0.3 * Math.sin((2 * Math.PI * 440 * (chunkIndex * chunk.length + sample)) / 16000);
+      }
+    }
+    highest = Math.max(highest, await vad.probability(chunk));
+  }
+  assert.ok(highest < 0.5, `voice probability ${highest}`);
+});
+
 function mockRealDebrid({ downloads = [], torrents = [], infos = {} }) {
   const calls = [];
   global.fetch = async (url, options = {}) => {

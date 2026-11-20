@@ -28,7 +28,7 @@ services:
 
       # Custom UID/GID for the application process (default: 1000 = node user)
       # The entrypoint runs as root, chowns data dirs to PUID:PGID, then
-      # drops privileges via su-exec. No need for `user:` in compose.
+      # drops privileges via gosu. No need for `user:` in compose.
       # - PUID=1000
       # - PGID=1000
     volumes:

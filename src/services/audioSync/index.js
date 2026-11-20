@@ -65,7 +65,7 @@ async function computeOffset(video, subtitleContent) {
   const result = findOffset(openingCues, speech, MAX_SHIFT_MS);
   log.warn(() => `[AudioSync] ${stream.filename || 'stream'}: first dialogue at ${(openingCues[0].start / 1000).toFixed(2)}s, ` +
     `offset ${result.offsetMs === null ? 'none' : `${result.offsetMs}ms`} (${result.reason || 'matched'}, ` +
-    `score ${result.scorePerFrame}, margin ${result.marginPerFrame}, ${result.cues} lines, ${Date.now() - startedAt}ms)`);
+    `score ${result.scorePerFrame}, margin ${result.marginPerFrame}, ${result.cues} lines, ${speech.detector}, ${Date.now() - startedAt}ms)`);
   return { ...result, offsetMs: result.offsetMs ?? 0 };
 }
 
