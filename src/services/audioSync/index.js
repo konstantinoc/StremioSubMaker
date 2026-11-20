@@ -12,6 +12,7 @@ const MIN_APPLIED_OFFSET_MS = 100;
 
 const offsetsByKey = new LRUCache({ max: 1000, ttl: 24 * 60 * 60 * 1000 });
 const pendingByKey = new Map();
+const reportedSkips = new LRUCache({ max: 500, ttl: 10 * 60 * 1000 });
 
 function realDebridToken() {
   return String(process.env.REALDEBRID_API_KEY || '').trim();
@@ -22,8 +23,25 @@ function normalizeVideoSize(videoSize) {
   return Number.isFinite(numericSize) && numericSize > 0 ? numericSize : null;
 }
 
-function isActive(config, videoSize) {
-  return config?.audioAutoSyncMode === true && Boolean(realDebridToken()) && normalizeVideoSize(videoSize) !== null;
+function isActive(config, videoSize, sourceFileId) {
+  if (config?.audioAutoSyncMode !== true) {
+    return false;
+  }
+  let skipReason = null;
+  if (!realDebridToken()) {
+    skipReason = 'REALDEBRID_API_KEY is not set on the server';
+  } else if (normalizeVideoSize(videoSize) === null) {
+    skipReason = 'the player sent no video size, so the Real-Debrid file cannot be found';
+  }
+  if (!skipReason) {
+    return true;
+  }
+  const skipKey = `${skipReason}|${sourceFileId}`;
+  if (!reportedSkips.has(skipKey)) {
+    reportedSkips.set(skipKey, true);
+    log.warn(() => `[AudioSync] Skipped for ${sourceFileId || 'subtitle'}: ${skipReason}`);
+  }
+  return false;
 }
 
 function buildKey(videoSize, sourceFileId) {
@@ -41,9 +59,10 @@ async function computeOffset(videoSize, subtitleContent) {
   }
   const durationMs = Math.min(MAX_AUDIO_MS, audioDurationNeededMs(openingCues, MAX_SHIFT_MS));
   const startedAt = Date.now();
+  log.warn(() => `[AudioSync] Reading ${Math.round(durationMs / 1000)}s of audio from ${stream.filename || 'Real-Debrid stream'}`);
   const speech = await extractSpeechScores(stream.url, durationMs / 1000);
   const result = findOffset(openingCues, speech, MAX_SHIFT_MS);
-  log.info(() => `[AudioSync] ${stream.filename || 'stream'}: first dialogue at ${(openingCues[0].start / 1000).toFixed(2)}s, ` +
+  log.warn(() => `[AudioSync] ${stream.filename || 'stream'}: first dialogue at ${(openingCues[0].start / 1000).toFixed(2)}s, ` +
     `offset ${result.offsetMs === null ? 'none' : `${result.offsetMs}ms`} (${result.reason || 'matched'}, ` +
     `score ${result.scorePerFrame}, margin ${result.marginPerFrame}, ${result.cues} lines, ${Date.now() - startedAt}ms)`);
   return { ...result, offsetMs: result.offsetMs ?? 0 };
@@ -51,7 +70,7 @@ async function computeOffset(videoSize, subtitleContent) {
 
 /** Starts (once per video and source subtitle) measuring the subtitle offset against the stream audio. */
 function prepare({ config, videoSize, sourceFileId, subtitleContent }) {
-  if (!isActive(config, videoSize) || !sourceFileId || typeof subtitleContent !== 'string') {
+  if (!sourceFileId || typeof subtitleContent !== 'string' || !isActive(config, videoSize, sourceFileId)) {
     return null;
   }
   const key = buildKey(videoSize, sourceFileId);
@@ -69,6 +88,9 @@ function prepare({ config, videoSize, sourceFileId, subtitleContent }) {
     .then((result) => {
       if (!result.retry) {
         offsetsByKey.set(key, result);
+      } else if (!reportedSkips.has(`${result.reason}|${key}`)) {
+        reportedSkips.set(`${result.reason}|${key}`, true);
+        log.warn(() => `[AudioSync] Skipped for ${sourceFileId}: ${result.reason}`);
       }
       pendingByKey.delete(key);
       return result;
@@ -87,7 +109,7 @@ function withTimeout(promise, timeoutMs) {
  * partial content is sent right away, shifted only if the offset is known.
  */
 async function applyToContent(content, { config, videoSize, sourceFileId, isFinal }) {
-  if (!isActive(config, videoSize) || !sourceFileId || typeof content !== 'string' || content.length === 0) {
+  if (!sourceFileId || typeof content !== 'string' || content.length === 0 || !isActive(config, videoSize, sourceFileId)) {
     return content;
   }
   const key = buildKey(videoSize, sourceFileId);
